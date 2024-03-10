@@ -2,7 +2,7 @@ use std::{fs::File, io::Read, path::Path, ptr};
 
 use ash::vk;
 
-use crate::device::GraphicDevice;
+use crate::core::device::GraphicDevice;
 
 pub struct Shader {
     pub(super) module: vk::ShaderModule

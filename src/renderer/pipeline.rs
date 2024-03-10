@@ -1,4 +1,4 @@
-use std::{ffi::CString, path::Path, ptr};
+use std::{ffi::CString, path::Path, ptr, rc::Rc};
 
 use ash::vk;
 
@@ -7,23 +7,25 @@ use super::{
     swapchain::SwapChain,
 };
 
-use crate::device::GraphicDevice;
+use crate::core::device::GraphicDevice;
 
 pub struct GraphicPipeline {
+    device: Rc<GraphicDevice>,
+    
     pub(crate) layout: vk::PipelineLayout,
     pub(crate) pipeline: vk::Pipeline,
 }
 
 impl GraphicPipeline {
     pub fn new(
-        device: &GraphicDevice,
+        device: Rc<GraphicDevice>,
         render_pass: &vk::RenderPass,
         swapchain: &SwapChain,
         ubo_set_layout: &vk::DescriptorSetLayout,
         msaa_samples: vk::SampleCountFlags,
     ) -> Self {
-        let vert_shader = Shader::from_spv(Path::new("shaders/default.vert.spv"), device);
-        let frag_shader = Shader::from_spv(Path::new("shaders/default.frag.spv"), device);
+        let vert_shader = Shader::from_spv(Path::new("shaders/default.vert.spv"), &device);
+        let frag_shader = Shader::from_spv(Path::new("shaders/default.frag.spv"), &device);
 
         let main_function_name = CString::new("main").unwrap(); // the beginning function name in shader code.
 
@@ -227,16 +229,27 @@ impl GraphicPipeline {
         }
 
         Self {
+            device,
             layout: pipeline_layout,
             pipeline: graphics_pipelines[0],
         }
     }
 
-    pub(crate) fn destroy(&self, device: &GraphicDevice) {
+    pub(crate) fn bind(&self, command_buffer: vk::CommandBuffer) {
         unsafe {
-            device.logical
+            self.device.logical.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline,
+            );
+        }
+    }
+
+    pub(crate) fn destroy(&self) {
+        unsafe {
+            self.device.logical
                 .destroy_pipeline(self.pipeline, None);
-            device.logical
+            self.device.logical
                 .destroy_pipeline_layout(self.layout, None);
         }
     }

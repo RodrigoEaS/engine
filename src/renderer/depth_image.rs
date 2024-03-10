@@ -1,10 +1,14 @@
+use std::rc::Rc;
+
 use ash::vk;
 
 use crate::texture::Texture;
 
-use crate::device::GraphicDevice;
+use crate::core::device::GraphicDevice;
 
 pub struct DepthImage {
+    device: Rc<GraphicDevice>,
+    
     pub(crate) image: vk::Image,
     pub(crate) image_view: vk::ImageView,
     pub(crate) memory: vk::DeviceMemory,
@@ -13,7 +17,7 @@ pub struct DepthImage {
 impl DepthImage {
     pub fn new(
         instance: &ash::Instance,
-        device: &GraphicDevice,
+        device: Rc<GraphicDevice>,
         swapchain_extent: &vk::Extent2D,
         msaa_samples: vk::SampleCountFlags,
     ) -> Self {
@@ -39,6 +43,7 @@ impl DepthImage {
         );
 
         Self {
+            device,
             image: depth_image,
             image_view: depth_image_view,
             memory: depth_image_memory
@@ -86,13 +91,13 @@ impl DepthImage {
         panic!("Failed to find supported format!")
     }
 
-    pub(crate) fn destroy(&self, device: &GraphicDevice) {
+    pub(crate) fn destroy(&self) {
         unsafe {
-            device.logical
+            self.device.logical
                 .destroy_image_view(self.image_view, None);
-            device.logical
+            self.device.logical
                 .destroy_image(self.image, None);
-            device.logical
+            self.device.logical
                 .free_memory(self.memory, None);
         }
     }

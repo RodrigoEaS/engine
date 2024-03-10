@@ -1,12 +1,14 @@
-use std::{cmp::max, path::Path, ptr};
+use std::{cmp::max, path::Path, ptr, rc::Rc};
 
 use ash::vk;
 
-use crate::{device::GraphicDevice, renderer::buffers::{create_buffer, find_memory_type}};
+use crate::{core::device::GraphicDevice, renderer::{buffers::{create_buffer, find_memory_type}, commandpool::CommandPool}};
 
 pub const FORMAT: vk::Format = vk::Format::R8G8B8A8_SRGB;
 
 pub struct Texture {
+    device: Rc<GraphicDevice>,
+    
     pub(crate) image: vk::Image,
     pub(crate) image_view: vk::ImageView,
     pub(crate) sampler: vk::Sampler,
@@ -15,7 +17,7 @@ pub struct Texture {
 }
 
 impl Texture {
-    pub fn new(device: &GraphicDevice, command_pool: &vk::CommandPool, image_path: &Path) -> Self {
+    pub fn new(device: Rc<GraphicDevice>, command_pool: &CommandPool, image_path: &Path) -> Self {
         let mut image_object = image::open(image_path).unwrap(); // this function is slow in debug mode.
         image_object = image_object.flipv();
         let (image_width, image_height) = (image_object.width(), image_object.height());
@@ -66,7 +68,7 @@ impl Texture {
             image_height,
             mip_levels,
             vk::SampleCountFlags::TYPE_1,
-            vk::Format::R8G8B8A8_UNORM,
+            FORMAT,
             vk::ImageTiling::OPTIMAL,
             vk::ImageUsageFlags::TRANSFER_SRC
                 | vk::ImageUsageFlags::TRANSFER_DST
@@ -77,10 +79,9 @@ impl Texture {
 
         Self::transition_image_layout(
             &device.logical,
-            *command_pool,
-            device.graphics_queue,
+            command_pool,
             texture_image,
-            vk::Format::R8G8B8A8_UNORM,
+            FORMAT,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             mip_levels,
@@ -88,8 +89,7 @@ impl Texture {
 
         Self::copy_buffer_to_image(
             &device.logical,
-            *command_pool,
-            device.graphics_queue,
+            &command_pool,
             staging_buffer,
             texture_image,
             image_width,
@@ -98,8 +98,7 @@ impl Texture {
 
         Self::generate_mipmaps(
             &device.logical,
-            *command_pool,
-            device.graphics_queue,
+            &command_pool,
             texture_image,
             image_width,
             image_height,
@@ -116,6 +115,7 @@ impl Texture {
         let texture_sampler = Self::create_texture_sampler(&device.logical, mip_levels);
 
         Self {
+            device,
             image: texture_image,
             memory: texture_image_memory,
             image_view: texture_image_view,
@@ -193,15 +193,14 @@ impl Texture {
 
     fn transition_image_layout(
         device: &ash::Device,
-        command_pool: vk::CommandPool,
-        submit_queue: vk::Queue,
+        command_pool: &CommandPool,
         image: vk::Image,
         format: vk::Format,
         old_layout: vk::ImageLayout,
         new_layout: vk::ImageLayout,
         mip_levels: u32,
     ) {
-        let command_buffer = Self::begin_single_time_command(device, command_pool);
+        let command_buffer = command_pool.begin_single_time_command();
 
         let src_access_mask;
         let dst_access_mask;
@@ -265,19 +264,18 @@ impl Texture {
             );
         }
 
-        Self::end_single_time_command(device, command_pool, submit_queue, command_buffer);
+        command_pool.end_single_time_command(command_buffer);
     }
 
     fn copy_buffer_to_image(
         device: &ash::Device,
-        command_pool: vk::CommandPool,
-        submit_queue: vk::Queue,
+        command_pool: &CommandPool,
         buffer: vk::Buffer,
         image: vk::Image,
         width: u32,
         height: u32,
     ) {
-        let command_buffer = Self::begin_single_time_command(device, command_pool);
+        let command_buffer = command_pool.begin_single_time_command();
 
         let buffer_image_regions = [vk::BufferImageCopy {
             image_subresource: vk::ImageSubresourceLayers {
@@ -307,78 +305,7 @@ impl Texture {
             );
         }
 
-        Self::end_single_time_command(device, command_pool, submit_queue, command_buffer);
-    }
-
-    fn begin_single_time_command(
-        device: &ash::Device,
-        command_pool: vk::CommandPool,
-    ) -> vk::CommandBuffer {
-        let command_buffer_allocate_info = vk::CommandBufferAllocateInfo {
-            s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
-            p_next: ptr::null(),
-            command_buffer_count: 1,
-            command_pool,
-            level: vk::CommandBufferLevel::PRIMARY,
-        };
-
-        let command_buffer = unsafe {
-            device
-                .allocate_command_buffers(&command_buffer_allocate_info)
-                .expect("Failed to allocate Command Buffers!")
-        }[0];
-
-        let command_buffer_begin_info = vk::CommandBufferBeginInfo {
-            s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
-            p_next: ptr::null(),
-            p_inheritance_info: ptr::null(),
-            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
-        };
-
-        unsafe {
-            device
-                .begin_command_buffer(command_buffer, &command_buffer_begin_info)
-                .expect("Failed to begin recording Command Buffer at beginning!");
-        }
-
-        command_buffer
-    }
-
-    fn end_single_time_command(
-        device: &ash::Device,
-        command_pool: vk::CommandPool,
-        submit_queue: vk::Queue,
-        command_buffer: vk::CommandBuffer,
-    ) {
-        unsafe {
-            device
-                .end_command_buffer(command_buffer)
-                .expect("Failed to record Command Buffer at Ending!");
-        }
-
-        let buffers_to_submit = [command_buffer];
-
-        let submit_infos = [vk::SubmitInfo {
-            s_type: vk::StructureType::SUBMIT_INFO,
-            p_next: ptr::null(),
-            wait_semaphore_count: 0,
-            p_wait_semaphores: ptr::null(),
-            p_wait_dst_stage_mask: ptr::null(),
-            command_buffer_count: 1,
-            p_command_buffers: buffers_to_submit.as_ptr(),
-            signal_semaphore_count: 0,
-            p_signal_semaphores: ptr::null(),
-        }];
-
-        unsafe {
-            device
-                .queue_submit(submit_queue, &submit_infos, vk::Fence::null())
-                .expect("Failed to Queue Submit!");
-            device
-                .queue_wait_idle(submit_queue)
-                .expect("Failed to wait Queue idle!");
-            device.free_command_buffers(command_pool, &buffers_to_submit);
-        }
+        command_pool.end_single_time_command(command_buffer);
     }
 
     pub(crate) fn create_image_view(
@@ -457,14 +384,13 @@ impl Texture {
 
     fn generate_mipmaps(
         device: &ash::Device,
-        command_pool: vk::CommandPool,
-        submit_queue: vk::Queue,
+        command_pool: &CommandPool,
         image: vk::Image,
         tex_width: u32,
         tex_height: u32,
         mip_levels: u32,
     ) {
-        let command_buffer = Self::begin_single_time_command(device, command_pool);
+        let command_buffer = command_pool.begin_single_time_command();
 
         let mut image_barrier = vk::ImageMemoryBarrier {
             s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
@@ -589,18 +515,18 @@ impl Texture {
             );
         }
 
-        Self::end_single_time_command(device, command_pool, submit_queue, command_buffer);
+        command_pool.end_single_time_command(command_buffer);
     }
 
-    pub(crate) fn destroy(&self, device: &GraphicDevice) {
+    pub(crate) fn destroy(&self) {
         unsafe {
-            device.logical
+            self.device.logical
                 .destroy_sampler(self.sampler, None);
-            device.logical
+            self.device.logical
                 .destroy_image_view(self.image_view, None);
-            device.logical
+            self.device.logical
                 .destroy_image(self.image, None);
-            device.logical
+            self.device.logical
                 .free_memory(self.memory, None);
         }
     }

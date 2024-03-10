@@ -1,6 +1,5 @@
 use ash::extensions::khr::Win32Surface;
 use ash::vk;
-use std::ops::Deref;
 use std::os::raw::c_void;
 use std::ptr;
 use winapi::um::libloaderapi::GetModuleHandleW;
@@ -9,7 +8,7 @@ use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 pub struct Surface {
     pub(crate) loader: ash::extensions::khr::Surface,
-    surface: vk::SurfaceKHR,
+    pub(crate) surface: vk::SurfaceKHR,
 }
 
 impl Surface {
@@ -50,13 +49,5 @@ impl Surface {
         unsafe {
             self.loader.destroy_surface(self.surface, None);
         }
-    }
-}
-
-impl Deref for Surface {
-    type Target = vk::SurfaceKHR;
-
-    fn deref(&self) -> &Self::Target {
-        &self.surface
     }
 }

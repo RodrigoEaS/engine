@@ -1,6 +1,8 @@
-use crate::renderer::{surface::Surface, swapchain::SwapChain, vk_to_string};
+use crate::renderer::{swapchain::SwapChain, vk_to_string};
 use ash::vk;
 use std::{collections::HashSet, ptr};
+
+use super::surface::Surface;
 
 struct DeviceExtension {
     names: [&'static str; 1],
@@ -11,8 +13,8 @@ const DEVICE_EXTENSIONS: DeviceExtension = DeviceExtension {
 };
 
 pub(crate) struct QueueFamilyIndices {
-    pub(super) graphics_family: Option<u32>,
-    pub(super) present_family: Option<u32>,
+    pub(crate) graphics_family: Option<u32>,
+    pub(crate) present_family: Option<u32>,
 }
 
 impl QueueFamilyIndices {
@@ -32,6 +34,7 @@ pub struct GraphicDevice {
     pub(crate) physical: vk::PhysicalDevice,
     pub(crate) memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub(crate) logical: ash::Device,
+    
     pub(crate) graphics_queue: vk::Queue,
     pub(crate) present_queue: vk::Queue,
     pub(crate) family_indices: QueueFamilyIndices,
@@ -39,8 +42,6 @@ pub struct GraphicDevice {
 
 impl GraphicDevice {
     pub fn new(instance: &ash::Instance, surface: &Surface) -> Self {
-        
-
         let physical_device = Self::pick_physical_device(instance, &surface);
         let physical_device_memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
@@ -89,10 +90,10 @@ impl GraphicDevice {
     fn is_physical_device_suitable(
         instance: &ash::Instance,
         physical_device: vk::PhysicalDevice,
-        surface_stuff: &Surface
+        surface: &Surface
     ) -> bool {
         let device_features = unsafe { instance.get_physical_device_features(physical_device) };
-        let indices = Self::find_queue_family(instance, physical_device, surface_stuff);
+        let indices = Self::find_queue_family(instance, physical_device, surface);
 
         let is_queue_family_supported = indices.is_complete();
         let is_device_extension_supported = Self::check_device_extension_support(
@@ -101,7 +102,7 @@ impl GraphicDevice {
         );
         let is_swapchain_supported = if is_device_extension_supported {
             let swapchain_support =
-                SwapChain::query_swapchain_support(physical_device, surface_stuff);
+                SwapChain::query_swapchain_support(physical_device, surface);
             !swapchain_support.formats.is_empty() && !swapchain_support.present_modes.is_empty()
         } else {
             false
@@ -190,7 +191,7 @@ impl GraphicDevice {
                 surface.loader.get_physical_device_surface_support(
                     physical_device,
                     index as u32,
-                    **surface,
+                    surface.surface,
                 )
             }
             .unwrap();
@@ -239,7 +240,7 @@ impl GraphicDevice {
         return required_extensions.is_empty();
     }
 
-    pub(crate) fn wait_device_idle(&self) {
+    pub(crate) fn wait_idle(&self) {
         unsafe {
             self.logical
                 .device_wait_idle()

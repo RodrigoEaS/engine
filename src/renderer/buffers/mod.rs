@@ -2,8 +2,6 @@ use std::ptr;
 use ash::vk;
 
 pub(crate) mod vertexbuffer;
-pub(crate) mod framebuffer;
-pub(crate) mod commandbuffer;
 pub(crate) mod indexbuffer;
 pub(crate) mod uniformbuffer;
 

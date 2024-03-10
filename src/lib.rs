@@ -1,7 +1,7 @@
 pub mod app;
-pub mod window;
-mod device;
+mod core;
 mod renderer;
-mod fps;
 mod texture;
-mod model;
+mod mesh;
+
+pub use winit::event_loop::EventLoop;

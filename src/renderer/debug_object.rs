@@ -1,6 +1,7 @@
 use ash::vk;
 
-use crate::app::{populate_debug_messenger_create_info, VALIDATION};
+use super::{populate_debug_messenger_create_info, VALIDATION};
+
 
 pub struct DebugObjects {
     utils_loader: ash::extensions::ext::DebugUtils,

@@ -1,7 +1,9 @@
+use std::rc::Rc;
+
 use ash::vk;
 use cgmath::Matrix4;
 
-use crate::device::GraphicDevice;
+use crate::core::device::GraphicDevice;
 
 use super::create_buffer;
 
@@ -14,12 +16,14 @@ pub struct UniformBufferObject {
 }
 
 pub struct UniformBuffer {
+    device: Rc<GraphicDevice>,
+    
     pub(crate) buffers: Vec<vk::Buffer>,
     pub(crate) memory: Vec<vk::DeviceMemory>
 }
 
 impl UniformBuffer {
-    pub fn new(device: &GraphicDevice, swapchain_image_count: usize) -> Self {
+    pub fn new(device: Rc<GraphicDevice>, swapchain_image_count: usize) -> Self {
         let buffer_size = std::mem::size_of::<UniformBufferObject>();
 
         let mut uniform_buffers = vec![];
@@ -38,17 +42,18 @@ impl UniformBuffer {
         }
         
         Self {
+            device,
             buffers: uniform_buffers,
             memory: uniform_buffers_memory
         }
     }
 
-    pub(crate) fn destroy(&self, device: &GraphicDevice) {
+    pub(crate) fn destroy(&self) {
         unsafe {
             for i in 0..self.buffers.len() {
-                device.logical
+                self.device.logical
                     .destroy_buffer(self.buffers[i], None);
-                device.logical
+                self.device.logical
                     .free_memory(self.memory[i], None);
             }
         }

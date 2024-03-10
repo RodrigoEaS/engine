@@ -1,12 +1,10 @@
-use std::ptr;
+use std::{ptr, rc::Rc};
 
 use ash::vk;
 use num::clamp;
 use winit::window::Window;
 
-use crate::device::GraphicDevice;
-
-use super::surface::Surface;
+use crate::core::{device::GraphicDevice, surface::Surface};
 
 pub(crate) struct SwapChainSupportDetail {
     capabilities: vk::SurfaceCapabilitiesKHR,
@@ -15,18 +13,21 @@ pub(crate) struct SwapChainSupportDetail {
 }
 
 pub struct SwapChain {
+    device: Rc<GraphicDevice>,
+    
     pub(crate) loader: ash::extensions::khr::Swapchain,
     pub(crate) swapchain: vk::SwapchainKHR,
     pub(crate) images: Vec<vk::Image>,
     pub(crate) format: vk::Format,
     pub(crate) extent: vk::Extent2D,
     pub(crate) imageviews: Vec<vk::ImageView>,
+    pub(crate) framebuffers: Vec<vk::Framebuffer>,
 }
 
 impl SwapChain {
     pub fn new(
         instance: &ash::Instance,
-        device: &GraphicDevice,
+        device: Rc<GraphicDevice>,
         window: &Window,
         surface: &Surface,
     ) -> Self {
@@ -63,7 +64,7 @@ impl SwapChain {
             s_type: vk::StructureType::SWAPCHAIN_CREATE_INFO_KHR,
             p_next: ptr::null(),
             flags: vk::SwapchainCreateFlagsKHR::empty(),
-            surface: **surface,
+            surface: surface.surface,
             min_image_count: image_count,
             image_color_space: surface_format.color_space,
             image_format: surface_format.format,
@@ -101,12 +102,15 @@ impl SwapChain {
         );
 
         Self {
+            device,
+
             loader: swapchain_loader,
             swapchain,
+            images: swapchain_images,
             format: surface_format.format,
             extent,
-            images: swapchain_images,
             imageviews: swapchain_imageviews,
+            framebuffers: Vec::new(),
         }
     }
 
@@ -117,15 +121,15 @@ impl SwapChain {
         unsafe {
             let capabilities = surface
                 .loader
-                .get_physical_device_surface_capabilities(physical_device, **surface)
+                .get_physical_device_surface_capabilities(physical_device, surface.surface)
                 .expect("Failed to query for surface capabilities.");
             let formats = surface
                 .loader
-                .get_physical_device_surface_formats(physical_device, **surface)
+                .get_physical_device_surface_formats(physical_device, surface.surface)
                 .expect("Failed to query for surface formats.");
             let present_modes = surface
                 .loader
-                .get_physical_device_surface_present_modes(physical_device, **surface)
+                .get_physical_device_surface_present_modes(physical_device, surface.surface)
                 .expect("Failed to query for surface present mode.");
 
             SwapChainSupportDetail {
@@ -229,10 +233,54 @@ impl SwapChain {
         swapchain_imageviews
     }
 
-    pub(crate) fn destroy(&self, device: &GraphicDevice) {
+    pub(crate) fn create_framebuffer(
+        &mut self,
+        render_pass: &vk::RenderPass,
+        depth_image_view: vk::ImageView,
+        color_image_view: vk::ImageView,
+    ) {
+        let mut framebuffers = vec![];
+
+        for &image_view in self.imageviews.iter() {
+            let attachments = [color_image_view, depth_image_view, image_view];
+
+            let framebuffer_create_info = vk::FramebufferCreateInfo {
+                s_type: vk::StructureType::FRAMEBUFFER_CREATE_INFO,
+                p_next: ptr::null(),
+                flags: vk::FramebufferCreateFlags::empty(),
+                render_pass: *render_pass,
+                attachment_count: attachments.len() as u32,
+                p_attachments: attachments.as_ptr(),
+                width: self.extent.width,
+                height: self.extent.height,
+                layers: 1,
+            };
+
+            let framebuffer = unsafe {
+                self.device.logical
+                    .create_framebuffer(&framebuffer_create_info, None)
+                    .expect("Failed to create Framebuffer!")
+            };
+
+            framebuffers.push(framebuffer);
+        }
+
+        self.framebuffers = framebuffers;
+    }
+
+    pub(crate) fn destroy_framebuffers(&self) {
+        unsafe {
+            for &framebuffer in self.framebuffers.iter() {
+                self.device.logical
+                    .destroy_framebuffer(framebuffer, None);
+            }
+        }
+    }
+
+    pub(crate) fn destroy(&self) {
         unsafe {
             for &image_view in self.imageviews.iter() {
-                device.logical.destroy_image_view(image_view, None);
+                self.device.logical.destroy_image_view(image_view, None);
             }
             self.loader.destroy_swapchain(self.swapchain, None);
         }

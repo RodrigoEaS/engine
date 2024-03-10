@@ -1,7 +1,9 @@
+use std::rc::Rc;
+
 use ash::vk;
 use memoffset::offset_of;
 
-use crate::device::GraphicDevice;
+use crate::core::device::GraphicDevice;
 
 use super::{copy_buffer, create_buffer};
 
@@ -47,12 +49,14 @@ impl Vertex {
 }
 
 pub struct VertexBuffer {
+    device: Rc<GraphicDevice>,
+    
     pub(crate) buffer: vk::Buffer,
     pub(crate) memory: vk::DeviceMemory
 } 
 
 impl VertexBuffer {
-    pub fn new (device: &GraphicDevice, command_pool: &vk::CommandPool, data: &[Vertex]) -> Self {
+    pub fn new (device: Rc<GraphicDevice>, command_pool: &vk::CommandPool, data: &[Vertex]) -> Self {
         let buffer_size = std::mem::size_of_val(data) as vk::DeviceSize;
 
         let (staging_buffer, staging_buffer_memory) = create_buffer(
@@ -101,16 +105,17 @@ impl VertexBuffer {
         };
 
         Self {
+            device,
             buffer: vertex_buffer,
             memory: vertex_buffer_memory,
         }
     }
 
-    pub(crate) fn destroy(&self, device: &GraphicDevice) {
+    pub(crate) fn destroy(&self) {
         unsafe {
-            device.logical
+            self.device.logical
                 .destroy_buffer(self.buffer, None);
-            device.logical
+            self.device.logical
                 .free_memory(self.memory, None);
         }
     }
