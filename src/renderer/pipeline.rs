@@ -3,11 +3,10 @@ use std::{ffi::CString, path::Path, ptr, rc::Rc};
 use ash::vk;
 
 use super::{
-    buffers::vertexbuffer::Vertex, shader::Shader,
-    swapchain::SwapChain,
+    descriptorset::DescriptorLayout, shader::Shader, swapchain::SwapChain
 };
 
-use crate::core::device::GraphicDevice;
+use crate::{core::device::GraphicDevice, mesh::Vertex};
 
 pub struct GraphicPipeline {
     device: Rc<GraphicDevice>,
@@ -21,7 +20,7 @@ impl GraphicPipeline {
         device: Rc<GraphicDevice>,
         render_pass: &vk::RenderPass,
         swapchain: &SwapChain,
-        ubo_set_layout: &vk::DescriptorSetLayout,
+        set_layout: &DescriptorLayout,
         msaa_samples: vk::SampleCountFlags,
     ) -> Self {
         let vert_shader = Shader::from_spv(Path::new("shaders/default.vert.spv"), &device);
@@ -171,14 +170,12 @@ impl GraphicPipeline {
             blend_constants: [0.0, 0.0, 0.0, 0.0],
         };
 
-        let set_layouts = [*ubo_set_layout];
-
         let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo {
             s_type: vk::StructureType::PIPELINE_LAYOUT_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::PipelineLayoutCreateFlags::empty(),
-            set_layout_count: set_layouts.len() as u32,
-            p_set_layouts: set_layouts.as_ptr(),
+            set_layout_count: 1,
+            p_set_layouts: &set_layout.layout,
             push_constant_range_count: 0,
             p_push_constant_ranges: ptr::null(),
         };

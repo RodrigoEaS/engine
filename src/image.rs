@@ -2,21 +2,21 @@ use std::{cmp::max, path::Path, ptr, rc::Rc};
 
 use ash::vk;
 
-use crate::{core::device::GraphicDevice, renderer::{buffers::{create_buffer, find_memory_type}, commandpool::CommandPool}};
+use crate::{core::device::GraphicDevice, renderer::{buffer::{find_memory_type, Buffer}, commandpool::CommandPool}};
 
 pub const FORMAT: vk::Format = vk::Format::R8G8B8A8_SRGB;
 
-pub struct Texture {
+pub struct Image {
     device: Rc<GraphicDevice>,
     
     pub(crate) image: vk::Image,
-    pub(crate) image_view: vk::ImageView,
+    pub(crate) view: vk::ImageView,
     pub(crate) sampler: vk::Sampler,
     pub(crate) memory: vk::DeviceMemory,
     mip_levels: u32
 }
 
-impl Texture {
+impl Image {
     pub fn new(device: Rc<GraphicDevice>, command_pool: &CommandPool, image_path: &Path) -> Self {
         let mut image_object = image::open(image_path).unwrap(); // this function is slow in debug mode.
         image_object = image_object.flipv();
@@ -39,28 +39,8 @@ impl Texture {
             panic!("Failed to load texture image!")
         }
 
-        let (staging_buffer, staging_buffer_memory) = create_buffer(
-            &device.logical,
-            image_size,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            &device.memory_properties,
-        );
-
-        unsafe {
-            let data_ptr = device.logical
-                .map_memory(
-                    staging_buffer_memory,
-                    0,
-                    image_size,
-                    vk::MemoryMapFlags::empty(),
-                )
-                .expect("Failed to Map Memory") as *mut u8;
-
-            data_ptr.copy_from_nonoverlapping(image_data.as_ptr(), image_data.len());
-
-            device.logical.unmap_memory(staging_buffer_memory);
-        }
+        let staging_buffer = Buffer::staging(device.clone(), image_size);
+        staging_buffer.map(&image_data, image_size);
 
         let (texture_image, texture_image_memory) = Self::create_image(
             &device.logical,
@@ -90,7 +70,7 @@ impl Texture {
         Self::copy_buffer_to_image(
             &device.logical,
             &command_pool,
-            staging_buffer,
+            staging_buffer.buffer,
             texture_image,
             image_width,
             image_height,
@@ -105,10 +85,7 @@ impl Texture {
             mip_levels,
         );
 
-        unsafe {
-            device.logical.destroy_buffer(staging_buffer, None);
-            device.logical.free_memory(staging_buffer_memory, None);
-        }
+        staging_buffer.destroy();
 
         let texture_image_view = 
             Self::create_texture_image_view(&device.logical, texture_image, 1);
@@ -118,7 +95,7 @@ impl Texture {
             device,
             image: texture_image,
             memory: texture_image_memory,
-            image_view: texture_image_view,
+            view: texture_image_view,
             sampler: texture_sampler,
             mip_levels
         }
@@ -523,7 +500,7 @@ impl Texture {
             self.device.logical
                 .destroy_sampler(self.sampler, None);
             self.device.logical
-                .destroy_image_view(self.image_view, None);
+                .destroy_image_view(self.view, None);
             self.device.logical
                 .destroy_image(self.image, None);
             self.device.logical

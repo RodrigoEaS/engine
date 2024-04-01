@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use ash::vk;
 
-use crate::texture::Texture;
+use crate::image::Image;
 
 use crate::core::device::GraphicDevice;
 
@@ -22,7 +22,7 @@ impl DepthImage {
         msaa_samples: vk::SampleCountFlags,
     ) -> Self {
         let depth_format = Self::find_depth_format(instance, device.physical);
-        let (depth_image, depth_image_memory) = Texture::create_image(
+        let (depth_image, depth_image_memory) = Image::create_image(
             &device.logical,
             swapchain_extent.width,
             swapchain_extent.height,
@@ -34,7 +34,7 @@ impl DepthImage {
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
             &device.memory_properties,
         );
-        let depth_image_view = Texture::create_image_view(
+        let depth_image_view = Image::create_image_view(
             &device.logical,
             depth_image,
             depth_format,

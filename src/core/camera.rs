@@ -1,10 +1,16 @@
-use cgmath::{Angle, Deg, Matrix4, SquareMatrix, Vector3};
+use cgmath::{Angle, Deg, Matrix4, Rad, SquareMatrix, Vector3};
+
+#[derive(Clone, Copy)]
+pub struct ProjectionViewObject {
+    pub(crate) view: Matrix4<f32>,
+    pub(crate) proj: Matrix4<f32>
+}
 
 pub struct Camera {
     pub(crate) position: Vector3<f32>, 
     pub(crate) rotation: Vector3<f32>,
 
-    pub(crate) fovy: Deg<f32>, 
+    pub(crate) fovy: Rad<f32>, 
     pub(crate) aspect: f32, 
     pub(crate) near: f32, 
     pub(crate) far: f32
@@ -16,7 +22,7 @@ impl Camera {
             position: Vector3 { x: 1.0, y: 1.0, z: 1.0 },
             rotation: Vector3 { x: 1.0, y: 1.0, z: 1.0 },
 
-            fovy: Deg(45.0),
+            fovy: Rad(45.0),
             aspect: extent.0 / extent.1,
             near: 0.1,
             far: 100.0,

@@ -160,7 +160,7 @@ impl App {
 
         event_loop.set_control_flow(ControlFlow::Poll);
 
-        self.renderer.record_command_buffers();
+        self.renderer.record();
 
         let _ = event_loop.run(move |event, control_flow| {
             match event {

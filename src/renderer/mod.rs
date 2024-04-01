@@ -1,4 +1,3 @@
-pub(crate) mod buffers;
 pub(crate) mod color_image;
 pub(crate) mod debug_object;
 pub(crate) mod depth_image;
@@ -8,6 +7,7 @@ pub(crate) mod pipeline;
 pub(crate) mod shader;
 pub(crate) mod swapchain;
 pub(crate) mod render_pass;
+pub(crate) mod buffer;
 mod sync_object;
 
 use ash::{
@@ -17,19 +17,17 @@ use ash::{
 use cgmath::{Matrix4, SquareMatrix};
 
 use core::ffi::{c_char, c_void, CStr};
-use std::{path::Path, ptr, rc::Rc};
+use std::{mem::{size_of, size_of_val}, path::Path, ptr, rc::Rc};
 use winit::window::Window;
 
 use crate::{
-    core::{camera::Camera, device::GraphicDevice, game_object::{GameObject, Transform}, surface::Surface},
+    core::{camera::{Camera, ProjectionViewObject}, device::GraphicDevice, entity::{Entity, Transform}, surface::Surface},
     mesh::Mesh,
-    texture::{check_mipmap_support, Texture},
+    image::{check_mipmap_support, Image},
 };
 
 use self::{
-    buffers::uniformbuffer::{UniformBuffer, UniformBufferObject}, color_image::ColorImage, commandpool::CommandPool, debug_object::DebugObjects, depth_image::DepthImage, descriptorset::{
-        DescriptorPool, DescriptorSetLayout, DescriptorSets
-    }, pipeline::GraphicPipeline, render_pass::RenderPass, swapchain::SwapChain, sync_object::{SyncObjects, MAX_FRAMES_IN_FLIGHT}
+    buffer::Buffer, color_image::ColorImage, commandpool::CommandPool, debug_object::DebugObjects, depth_image::DepthImage, descriptorset::{descriptor_write, DescriptorInfo, DescriptorLayout, DescriptorPool}, pipeline::GraphicPipeline, render_pass::RenderPass, swapchain::SwapChain, sync_object::{SyncObjects, MAX_FRAMES_IN_FLIGHT}
 };
 
 pub fn required_extension_names() -> Vec<*const i8> {
@@ -105,22 +103,24 @@ pub struct Renderer {
 
     render_pass: RenderPass,
 
-    ubo_layout: DescriptorSetLayout,
-
     pipeline: GraphicPipeline,
 
-    texture: Texture,
+    texture: Image,
+    mesh: Mesh,
 
-    object1: GameObject,
-    object2: GameObject,
+    texture2: Image,
+    mesh2: Mesh,
 
-    global_ubo: UniformBufferObject,
-    uniformbuffer: UniformBuffer,
+    projection_view: ProjectionViewObject,
+    uniform_buffer: Buffer,
 
-    descriptor_pool: DescriptorPool,
-    descriptor_sets: DescriptorSets,
+    object_transforms: [Matrix4<f32>; 3],
+    storage_buffer: Buffer,
 
     command_pool: CommandPool,
+
+    set_layout: DescriptorLayout,
+    descriptor_pool: DescriptorPool,
 
     sync_objects: SyncObjects,
     current_frame: usize,
@@ -136,6 +136,8 @@ impl Renderer {
         window: Rc<Window>,
         surface: Rc<Surface>,
     ) -> Self {
+        check_mipmap_support(&instance, device.physical);
+
         let msaa_samples = Self::get_max_usable_sample_count(&instance, device.physical);
         
         let debug_objects = DebugObjects::new(&entry, &instance);
@@ -143,7 +145,7 @@ impl Renderer {
         let mut swapchain = SwapChain::new(
             &instance, device.clone(), &window, &surface
         );
-
+        
         let color_image = ColorImage::new(
             device.clone(), &swapchain.format, &swapchain.extent, msaa_samples
         );
@@ -160,50 +162,128 @@ impl Renderer {
             depth_image.image_view, 
             color_image.image_view
         );
-
-        let ubo_layout = DescriptorSetLayout::new(device.clone());
-
+        
         let mut command_pool = CommandPool::new(device.clone());
+
+        let set_layout = DescriptorLayout::new(device.clone(), vec![
+            vk::DescriptorSetLayoutBinding { 
+                binding: 0, 
+                descriptor_type: vk::DescriptorType::UNIFORM_BUFFER, 
+                descriptor_count: 1, 
+                stage_flags: vk::ShaderStageFlags::VERTEX, 
+                ..Default::default()
+            },
+            vk::DescriptorSetLayoutBinding { 
+                binding: 1, 
+                descriptor_type: vk::DescriptorType::STORAGE_BUFFER, 
+                descriptor_count: 1, 
+                stage_flags: vk::ShaderStageFlags::VERTEX, 
+                ..Default::default()
+            },
+            vk::DescriptorSetLayoutBinding { 
+                binding: 2, 
+                descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 
+                descriptor_count: 1, 
+                stage_flags: vk::ShaderStageFlags::FRAGMENT, 
+                ..Default::default()
+            }
+        ]);
 
         let pipeline = GraphicPipeline::new(
             device.clone(), 
             &render_pass.pass, 
             &swapchain, 
-            &ubo_layout.layout, 
+            &set_layout, 
             msaa_samples
         );
 
+        let texture = Image::new(
+            device.clone(), 
+            &command_pool, 
+            Path::new("res/Rail.png")
+        );
         let mesh = Mesh::from_obj(
             device.clone(), 
-            &command_pool.pool, 
-            Path::new("Rail.obj")
+            &command_pool, 
+            Path::new("res/Rail.obj")
         );
 
-        let mut object1 = GameObject::new(mesh.clone());
-        object1.position.x = -2.0;
+        let texture2 = Image::new(
+            device.clone(), 
+            &command_pool, 
+            Path::new("res/Viking.png")
+        );
+        let mesh2 = Mesh::from_obj(
+            device.clone(), 
+            &command_pool, 
+            Path::new("res/Viking.obj")
+        );
 
-        let object2 = GameObject::new(mesh.clone());
+        let mut object = Entity::new();
+        object.position.x = -1.0;
 
-        check_mipmap_support(&instance, device.physical);
-        let texture = Texture::new(device.clone(), &command_pool, Path::new("Rail.png"));
+        let object2 = Entity::new();
 
-        let global_ubo = UniformBufferObject {
-            model: object1.transform(),
+        let mut object3 = Entity::new();
+        object3.position.x = 2.0;
+
+        let projection_view = ProjectionViewObject {
             view: Matrix4::identity(),
             proj: Matrix4::identity()
         };
+        let uniform_buffer = Buffer::uniform(device.clone(), size_of_val(&projection_view) as u64);
 
-        let uniformbuffer = UniformBuffer::new(device.clone(), swapchain.images.len());
+        let object_transforms = [object.transform(), object2.transform(), object3.transform()]; 
+        let storage_buffer = Buffer::storage(device.clone(), (size_of::<Matrix4<f32>>() * object_transforms.len()) as u64);
 
-        let descriptor_pool = DescriptorPool::new(device.clone(), swapchain.images.len());
-        let descriptor_sets = DescriptorSets::new(
-            device.clone(),
-            &descriptor_pool.pool,
-            &ubo_layout.layout,
-            &uniformbuffer.buffers,
-            swapchain.images.len(),
-            &texture,
+        let mut descriptor_pool = DescriptorPool::new(device.clone(), 
+            vec![
+                vk::DescriptorPoolSize { 
+                    ty: vk::DescriptorType::UNIFORM_BUFFER, 
+                    descriptor_count: 1 
+                },
+                vk::DescriptorPoolSize { 
+                    ty: vk::DescriptorType::STORAGE_BUFFER, 
+                    descriptor_count: 1 
+                },
+                vk::DescriptorPoolSize { 
+                    ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 
+                    descriptor_count: 1 
+                }
+            ]
         );
+        descriptor_pool.create_sets(set_layout.layout);
+
+        let descriptor_infos = vec![
+            DescriptorInfo::buffer(uniform_buffer.buffer),
+            DescriptorInfo::buffer(storage_buffer.buffer),
+            DescriptorInfo::image(texture.sampler, texture.view)
+        ];
+        let descriptor_writes = vec![
+            descriptor_write(
+                descriptor_pool.sets[0], 
+                vk::DescriptorType::UNIFORM_BUFFER, 
+                &descriptor_infos[0], 
+                0, 
+                1
+            ),
+            descriptor_write(
+                descriptor_pool.sets[0], 
+                vk::DescriptorType::STORAGE_BUFFER, 
+                &descriptor_infos[1], 
+                1, 
+                1
+            ),
+            descriptor_write(
+                descriptor_pool.sets[0], 
+                vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 
+                &descriptor_infos[2], 
+                2, 
+                1
+            )
+        ];
+
+        descriptor_pool.update_sets(descriptor_writes);
 
         let sync_objects = SyncObjects::new(device.clone());
 
@@ -227,22 +307,24 @@ impl Renderer {
 
             render_pass,
 
-            ubo_layout,
-
             pipeline,
 
             texture,
+            mesh,
 
-            object1,
-            object2,
+            texture2,
+            mesh2,
 
-            global_ubo,
-            uniformbuffer,
+            projection_view,
+            uniform_buffer,
 
-            descriptor_pool,
-            descriptor_sets,
+            object_transforms,
+            storage_buffer,
 
             command_pool,
+
+            set_layout,
+            descriptor_pool,
 
             sync_objects,
             current_frame: 0,
@@ -289,7 +371,7 @@ impl Renderer {
         vk::SampleCountFlags::TYPE_1
     }
 
-    pub(crate) fn record_command_buffers(&mut self) {
+    pub(crate) fn record(&mut self) {
         for (i, &command_buffer) in self.command_pool.buffers.iter().enumerate() {
             self.command_pool.begin_command_buffer(command_buffer);
 
@@ -299,13 +381,13 @@ impl Renderer {
                 self.swapchain.framebuffers[i]
             );
 
-            self.descriptor_sets.bind(i, command_buffer, self.pipeline.layout);
+            self.descriptor_pool.bind(command_buffer, self.pipeline.layout);
 
             self.pipeline.bind(command_buffer);
 
-            self.object1.mesh.bind(command_buffer);
+            self.mesh.bind(command_buffer);
 
-            self.object1.mesh.draw(command_buffer);
+            self.mesh.draw(command_buffer, 3);
 
             self.render_pass.end(command_buffer);
 
@@ -341,7 +423,8 @@ impl Renderer {
             }
         };
 
-        self.update_uniform_buffer(image_index as usize, camera);
+        self.update_storage_buffer();
+        self.update_uniform_buffer(camera);
 
         let wait_semaphores = [self.sync_objects.image_available_semaphores[self.current_frame]];
         let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
@@ -442,7 +525,7 @@ impl Renderer {
             self.device.clone(),
             &self.render_pass.pass,
             &self.swapchain,
-            &self.ubo_layout.layout,
+            &self.set_layout,
             self.msaa_samples,
         );
         self.color_image = ColorImage::new(
@@ -466,30 +549,24 @@ impl Renderer {
 
         self.command_pool.allocate_buffers(&self.swapchain.framebuffers);
 
-        self.record_command_buffers();
+        self.record();
     }
     
-    fn update_uniform_buffer(&mut self, current_image: usize, camera: &Camera) {
-        self.global_ubo.view = camera.get_view();
-        self.global_ubo.proj = camera.get_projection();
-        
-        let ubos = [self.global_ubo];
+    fn update_storage_buffer(&mut self) {
+        self.storage_buffer.map(
+            &self.object_transforms, 
+            (size_of::<Matrix4<f32>>() * self.object_transforms.len()) as u64
+        );
+    }
 
-        let buffer_size = (std::mem::size_of::<UniformBufferObject>() * ubos.len()) as u64;
+    fn update_uniform_buffer(&mut self, camera: &Camera) {
+        self.projection_view.view = camera.get_view();
+        self.projection_view.proj = camera.get_projection();
 
-        unsafe {
-            let data_ptr = self.device.logical.map_memory(
-                self.uniformbuffer.memory[current_image],
-                0,
-                buffer_size,
-                vk::MemoryMapFlags::empty(),
-            )
-            .expect("Failed to Map Memory") as *mut UniformBufferObject;
-
-            data_ptr.copy_from_nonoverlapping(ubos.as_ptr(), ubos.len());
-
-            self.device.logical.unmap_memory(self.uniformbuffer.memory[current_image]);
-        }
+        self.uniform_buffer.map(
+            &[self.projection_view], 
+            size_of_val(&self.projection_view) as u64
+        );
     }
     
     pub(crate) fn resize_framebuffer(&mut self) {
@@ -505,13 +582,16 @@ impl Renderer {
 
         self.descriptor_pool.destroy();
 
-        self.uniformbuffer.destroy();
+        self.uniform_buffer.destroy();
+        self.storage_buffer.destroy();
 
-        self.object1.mesh.destroy();
-
+        self.mesh.destroy();
         self.texture.destroy();
 
-        self.ubo_layout.destroy();
+        self.mesh2.destroy();
+        self.texture2.destroy();
+
+        self.set_layout.destroy();
 
         self.command_pool.destroy();
 

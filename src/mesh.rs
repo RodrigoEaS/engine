@@ -1,15 +1,57 @@
-use std::{path::Path, rc::Rc};
+use std::{mem::size_of, path::Path, rc::Rc};
 
 use ash::vk;
+use memoffset::offset_of;
 use tobj::LoadOptions;
 
-use crate::{core::device::GraphicDevice, renderer::buffers::{indexbuffer::IndexBuffer, vertexbuffer::{Vertex, VertexBuffer}}};
+use crate::{core::device::GraphicDevice, renderer::{buffer::Buffer, commandpool::CommandPool}};
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Vertex {
+    pub pos: [f32; 3],
+    pub color: [f32; 3],
+    pub tex_coord: [f32; 2],
+}
+
+impl Vertex {
+    pub fn get_binding_descriptions() -> [vk::VertexInputBindingDescription; 1] {
+        [vk::VertexInputBindingDescription {
+            binding: 0,
+            stride: std::mem::size_of::<Self>() as u32,
+            input_rate: vk::VertexInputRate::VERTEX,
+        }]
+    }
+
+    pub fn get_attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
+        [
+            vk::VertexInputAttributeDescription {
+                binding: 0,
+                location: 0,
+                format: vk::Format::R32G32B32A32_SFLOAT,
+                offset: offset_of!(Self, pos) as u32,
+            },
+            vk::VertexInputAttributeDescription {
+                binding: 0,
+                location: 1,
+                format: vk::Format::R32G32B32A32_SFLOAT,
+                offset: offset_of!(Self, color) as u32,
+            },
+            vk::VertexInputAttributeDescription {
+                binding: 0,
+                location: 2,
+                format: vk::Format::R32G32_SFLOAT,
+                offset: offset_of!(Self, tex_coord) as u32,
+            },
+        ]
+    }
+}
 
 pub struct Mesh {
     device: Rc<GraphicDevice>,
 
-    pub(crate) vertex_buffer: VertexBuffer,
-    pub(crate) index_buffer: IndexBuffer,
+    pub(crate) vertex_buffer: Buffer,
+    pub(crate) index_buffer: Buffer,
 
     pub(crate) index_count: u32,
 }
@@ -17,9 +59,9 @@ pub struct Mesh {
 impl Mesh {
     pub fn from_obj( 
         device: Rc<GraphicDevice>, 
-        command_pool: &vk::CommandPool, 
+        command_pool: &CommandPool, 
         model_path: &Path
-    ) -> Rc<Self> {
+    ) -> Self {
         let model_obj = tobj::load_obj(
             model_path, &LoadOptions{
                 single_index: true,
@@ -54,23 +96,45 @@ impl Mesh {
 
             indices = mesh.indices.clone();
         }
+        
+        //VERTEX BUFFER
+        let vertex_size = (size_of::<Vertex>() * vertices.len()) as u64;
 
-        let vertex_buffer = VertexBuffer::new(
-            device.clone(), command_pool, &vertices
+        let vertex_staging_buffer = Buffer::staging(device.clone(), vertex_size);
+        vertex_staging_buffer.map(&vertices, vertex_size);
+
+        let vertex_buffer = Buffer::vertex(device.clone(), vertex_size);
+        vertex_buffer.copy(
+            &vertex_staging_buffer,
+            command_pool, 
+            vertex_size
         );
 
-        let index_buffer = IndexBuffer::new(
-            device.clone(), command_pool, &indices
-        );
+        vertex_staging_buffer.destroy();
 
-        Rc::new(Self {
+        //INDEX BUFFER
+        let index_size = (size_of::<u32>() * indices.len()) as u64;
+
+        let index_staging_buffer = Buffer::staging(device.clone(), index_size);
+        index_staging_buffer.map(&indices, index_size);
+
+        let index_buffer = Buffer::index(device.clone(), index_size);
+        index_buffer.copy(
+            &index_staging_buffer,
+            command_pool, 
+            index_size
+        );
+        
+        index_staging_buffer.destroy();
+        
+        Self {
             device,
 
             vertex_buffer,
             index_buffer,
 
             index_count: indices.len() as u32,
-        }) 
+        }
     }
 
     pub(crate) fn bind(&self, command_buffer: vk::CommandBuffer) {
@@ -93,12 +157,12 @@ impl Mesh {
         }
     }
 
-    pub(crate) fn draw(&self, command_buffer: vk::CommandBuffer) {
+    pub(crate) fn draw(&self, command_buffer: vk::CommandBuffer, count: u32) {
         unsafe {
             self.device.logical.cmd_draw_indexed(
                 command_buffer, 
                 self.index_count, 
-                1, 
+                count, 
                 0, 
                 0, 
                 0

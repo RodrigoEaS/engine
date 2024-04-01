@@ -1,29 +1,21 @@
-use std::rc::Rc;
-
 use cgmath::{Matrix4, Vector3, Vector4};
-
-use crate::mesh::Mesh;
 
 pub trait Transform {
     fn transform(&self) -> Matrix4<f32>;
 }
 
-pub struct GameObject {
+pub struct Entity {
     pub(crate) position: Vector3<f32>,
     pub(crate) scale: Vector3<f32>,
     pub(crate) rotation: Vector3<f32>,
-
-    pub(crate) mesh: Rc<Mesh>
 }
 
-impl GameObject {
-    pub fn new(mesh: Rc<Mesh>) -> Self {
+impl Entity {
+    pub fn new() -> Self {
         Self {
             position: Vector3 { x: 1.0, y: 1.0, z: 1.0 },
             scale: Vector3 { x: 1.0, y: 1.0, z: 1.0 },
             rotation: Vector3 { x: 1.0, y: 1.0, z: 1.0 },
-
-            mesh,
         }
     }
 
@@ -45,7 +37,7 @@ impl GameObject {
     */
 }
 
-impl Transform for GameObject {
+impl Transform for Entity {
     // Matrix corrsponds to Translate * Ry * Rx * Rz * Scale
     // Rotations correspond to Tait-bryan angles of Y(1), X(2), Z(3)
     // https://en.wikipedia.org/wiki/Euler_angles#Rotation_matrix

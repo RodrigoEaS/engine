@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use ash::vk;
 
-use crate::{core::device::GraphicDevice, texture::Texture};
+use crate::{core::device::GraphicDevice, image::Image};
 
 pub struct ColorImage {
     device: Rc<GraphicDevice>,
@@ -21,7 +21,7 @@ impl ColorImage {
     ) -> Self {
         let color_format = *format;
 
-        let (color_image, color_image_memory) = Texture::create_image(
+        let (color_image, color_image_memory) = Image::create_image(
             &device.logical,
             extent.width,
             extent.height,
@@ -34,7 +34,7 @@ impl ColorImage {
             &device.memory_properties,
         );
 
-        let color_image_view = Texture::create_image_view(
+        let color_image_view = Image::create_image_view(
             &device.logical,
             color_image,
             color_format,
