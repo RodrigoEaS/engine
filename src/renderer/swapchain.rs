@@ -1,8 +1,8 @@
 use std::{ptr, rc::Rc};
 
 use ash::vk;
+use cgmath::Vector2;
 use num::clamp;
-use winit::window::Window;
 
 use crate::core::{device::GraphicDevice, surface::Surface};
 
@@ -28,16 +28,14 @@ impl SwapChain {
     pub fn new(
         instance: &ash::Instance,
         device: Rc<GraphicDevice>,
-        window: &Window,
+        size: Vector2<u32>,
         surface: &Surface,
     ) -> Self {
-        let window_size = (window.inner_size().width, window.inner_size().height);
-
         let swapchain_support = Self::query_swapchain_support(device.physical, surface);
 
         let surface_format = Self::choose_swapchain_format(&swapchain_support.formats);
         let present_mode = Self::choose_swapchain_present_mode(&swapchain_support.present_modes);
-        let extent = Self::choose_swapchain_extent(&swapchain_support.capabilities, &window_size);
+        let extent = Self::choose_swapchain_extent(&swapchain_support.capabilities, size);
 
         let image_count = swapchain_support.capabilities.min_image_count + 1;
         let image_count = if swapchain_support.capabilities.max_image_count > 0 {
@@ -170,21 +168,21 @@ impl SwapChain {
 
     pub fn choose_swapchain_extent(
         capabilities: &vk::SurfaceCapabilitiesKHR,
-        size: &(u32, u32),
+        size: Vector2<u32>,
     ) -> vk::Extent2D {
         if capabilities.current_extent.width != u32::max_value() {
             capabilities.current_extent
         } else {
-            println!("Inner Window Size: ({}, {})", size.0, size.1);
+            println!("Inner Window Size: ({}, {})", size.x, size.y);
 
             vk::Extent2D {
                 width: clamp(
-                    size.0,
+                    size.x,
                     capabilities.min_image_extent.width,
                     capabilities.max_image_extent.width,
                 ),
                 height: clamp(
-                    size.1,
+                    size.y,
                     capabilities.min_image_extent.height,
                     capabilities.max_image_extent.height,
                 ),

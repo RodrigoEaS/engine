@@ -4,6 +4,29 @@ pub trait Transform {
     fn transform(&self) -> Matrix4<f32>;
 }
 
+pub struct EntityJoin{
+    entities: Vec<Entity>
+}
+
+impl EntityJoin {
+    pub fn new() -> Self {
+        Self {
+            entities: Vec::new()
+        }
+    }
+
+    pub(crate) fn add(&mut self, entity: Entity) {
+        self.entities.push(entity)
+    }
+
+    pub(crate) fn get_transforms(&self) -> Vec<Matrix4<f32>> {
+        self.entities.iter().map(|x| -> Matrix4<f32> {
+                x.transform()
+            }
+        ).collect()
+    }
+}
+
 pub struct Entity {
     pub(crate) position: Vector3<f32>,
     pub(crate) scale: Vector3<f32>,

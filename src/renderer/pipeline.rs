@@ -3,7 +3,7 @@ use std::{ffi::CString, path::Path, ptr, rc::Rc};
 use ash::vk;
 
 use super::{
-    descriptorset::DescriptorLayout, shader::Shader, swapchain::SwapChain
+    shader::Shader, swapchain::SwapChain
 };
 
 use crate::{core::device::GraphicDevice, mesh::Vertex};
@@ -20,7 +20,8 @@ impl GraphicPipeline {
         device: Rc<GraphicDevice>,
         render_pass: &vk::RenderPass,
         swapchain: &SwapChain,
-        set_layout: &DescriptorLayout,
+        set_layouts: &Vec<vk::DescriptorSetLayout>,
+        push_constant_size: u32,
         msaa_samples: vk::SampleCountFlags,
     ) -> Self {
         let vert_shader = Shader::from_spv(Path::new("shaders/default.vert.spv"), &device);
@@ -53,7 +54,13 @@ impl GraphicPipeline {
 
         let binding_description = Vertex::get_binding_descriptions();
         let attribute_description = Vertex::get_attribute_descriptions();
-
+        
+        let vertex_push_constant_range = vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::VERTEX,
+            offset: 0,
+            size: push_constant_size,
+        };
+            
         let vertex_input_state_create_info = vk::PipelineVertexInputStateCreateInfo {
             s_type: vk::StructureType::PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             p_next: ptr::null(),
@@ -174,10 +181,10 @@ impl GraphicPipeline {
             s_type: vk::StructureType::PIPELINE_LAYOUT_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::PipelineLayoutCreateFlags::empty(),
-            set_layout_count: 1,
-            p_set_layouts: &set_layout.layout,
-            push_constant_range_count: 0,
-            p_push_constant_ranges: ptr::null(),
+            set_layout_count: set_layouts.len() as u32,
+            p_set_layouts: set_layouts.as_ptr(),
+            push_constant_range_count: 1,
+            p_push_constant_ranges: [vertex_push_constant_range].as_ptr(),
         };
 
         let pipeline_layout = unsafe {

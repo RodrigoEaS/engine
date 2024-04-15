@@ -14,16 +14,13 @@ use ash::{
     extensions::{ext, khr},
     vk,
 };
-use cgmath::{Matrix4, SquareMatrix};
+use cgmath::{Matrix, Matrix4, SquareMatrix};
 
 use core::ffi::{c_char, c_void, CStr};
-use std::{mem::{size_of, size_of_val}, path::Path, ptr, rc::Rc};
-use winit::window::Window;
+use std::{ffi::CString, mem::{size_of, size_of_val}, path::Path, ptr, rc::Rc, slice};
 
 use crate::{
-    core::{camera::{Camera, ProjectionViewObject}, device::GraphicDevice, entity::{Entity, Transform}, surface::Surface},
-    mesh::Mesh,
-    image::{check_mipmap_support, Image},
+    app::NAME, core::{camera::{Camera, ProjectionViewObject}, device::GraphicDevice, entity::{Entity, EntityJoin}, surface::{Surface, Win32Window}}, image::{check_mipmap_support, Image}, mesh::Mesh
 };
 
 use self::{
@@ -85,14 +82,17 @@ pub fn vk_to_string(raw_string_array: &[c_char]) -> String {
         .to_owned()
 }
 
+pub fn size_of_array<T>(data: &[T]) -> usize {
+    size_of::<T>() * data.len()
+}
+
 pub struct Renderer {
     msaa_samples: vk::SampleCountFlags,
 
-    device: Rc<GraphicDevice>,
-    instance: Rc<ash::Instance>,
+    pub(crate) device: Rc<GraphicDevice>,
+    instance: ash::Instance,
 
-    window: Rc<Window>,
-    surface: Rc<Surface>,
+    surface: Surface,
 
     debug_objects: DebugObjects,
 
@@ -102,6 +102,8 @@ pub struct Renderer {
     color_image: ColorImage,
 
     render_pass: RenderPass,
+
+    entities: EntityJoin,
 
     pipeline: GraphicPipeline,
 
@@ -114,12 +116,9 @@ pub struct Renderer {
     projection_view: ProjectionViewObject,
     uniform_buffer: Buffer,
 
-    object_transforms: [Matrix4<f32>; 3],
-    storage_buffer: Buffer,
-
     command_pool: CommandPool,
 
-    set_layout: DescriptorLayout,
+    set_layouts: Vec<DescriptorLayout>,
     descriptor_pool: DescriptorPool,
 
     sync_objects: SyncObjects,
@@ -129,13 +128,14 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(
-        device: Rc<GraphicDevice>,
-        entry: ash::Entry,
-        instance: Rc<ash::Instance>,
-        window: Rc<Window>,
-        surface: Rc<Surface>,
-    ) -> Self {
+    pub fn new(window: &Win32Window) -> Self {
+        let entry = ash::Entry::linked();
+        let instance = Self::create_instance(&entry);
+        
+        let surface = Surface::new(&entry, &instance, &window);
+
+        let device = Rc::new(GraphicDevice::new(&instance, &surface));
+        
         check_mipmap_support(&instance, device.physical);
 
         let msaa_samples = Self::get_max_usable_sample_count(&instance, device.physical);
@@ -143,7 +143,7 @@ impl Renderer {
         let debug_objects = DebugObjects::new(&entry, &instance);
 
         let mut swapchain = SwapChain::new(
-            &instance, device.clone(), &window, &surface
+            &instance, device.clone(), window.size, &surface
         );
         
         let color_image = ColorImage::new(
@@ -165,38 +165,36 @@ impl Renderer {
         
         let mut command_pool = CommandPool::new(device.clone());
 
-        let set_layout = DescriptorLayout::new(device.clone(), vec![
-            vk::DescriptorSetLayoutBinding { 
-                binding: 0, 
-                descriptor_type: vk::DescriptorType::UNIFORM_BUFFER, 
-                descriptor_count: 1, 
-                stage_flags: vk::ShaderStageFlags::VERTEX, 
-                ..Default::default()
-            },
-            vk::DescriptorSetLayoutBinding { 
-                binding: 1, 
-                descriptor_type: vk::DescriptorType::STORAGE_BUFFER, 
-                descriptor_count: 1, 
-                stage_flags: vk::ShaderStageFlags::VERTEX, 
-                ..Default::default()
-            },
-            vk::DescriptorSetLayoutBinding { 
-                binding: 2, 
-                descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 
-                descriptor_count: 1, 
-                stage_flags: vk::ShaderStageFlags::FRAGMENT, 
-                ..Default::default()
-            }
-        ]);
-
-        let pipeline = GraphicPipeline::new(
-            device.clone(), 
-            &render_pass.pass, 
-            &swapchain, 
-            &set_layout, 
-            msaa_samples
-        );
-
+        let set_layouts = vec![
+            DescriptorLayout::new(device.clone(), vec![
+                vk::DescriptorSetLayoutBinding { 
+                    binding: 0, 
+                    descriptor_type: vk::DescriptorType::UNIFORM_BUFFER, 
+                    descriptor_count: 1, 
+                    stage_flags: vk::ShaderStageFlags::VERTEX, 
+                    ..Default::default()
+                }
+            ]),
+            DescriptorLayout::new(device.clone(), vec![
+                vk::DescriptorSetLayoutBinding { 
+                    binding: 0, 
+                    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 
+                    descriptor_count: 1, 
+                    stage_flags: vk::ShaderStageFlags::FRAGMENT, 
+                    ..Default::default()
+                }
+            ]),
+            DescriptorLayout::new(device.clone(), vec![
+                vk::DescriptorSetLayoutBinding { 
+                    binding: 0, 
+                    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 
+                    descriptor_count: 1, 
+                    stage_flags: vk::ShaderStageFlags::FRAGMENT, 
+                    ..Default::default()
+                }
+            ])
+        ];
+        
         let texture = Image::new(
             device.clone(), 
             &command_pool, 
@@ -219,22 +217,33 @@ impl Renderer {
             Path::new("res/Viking.obj")
         );
 
-        let mut object = Entity::new();
-        object.position.x = -1.0;
+        let object = Entity::new();
+        let mut object2 = Entity::new();
+        object2.position.x = -2.0;
 
-        let object2 = Entity::new();
+        let mut entities = EntityJoin::new();
+        entities.add(object);
+        entities.add(object2);
 
-        let mut object3 = Entity::new();
-        object3.position.x = 2.0;
+        let pipeline = GraphicPipeline::new(
+            device.clone(), 
+            &render_pass.pass, 
+            &swapchain, 
+            {
+                &set_layouts.iter().map(|x| -> vk::DescriptorSetLayout {
+                        x.layout
+                    }
+                ).collect()
+            }, 
+            size_of_array(&entities.get_transforms()) as u32,
+            msaa_samples
+        );
 
         let projection_view = ProjectionViewObject {
             view: Matrix4::identity(),
             proj: Matrix4::identity()
         };
         let uniform_buffer = Buffer::uniform(device.clone(), size_of_val(&projection_view) as u64);
-
-        let object_transforms = [object.transform(), object2.transform(), object3.transform()]; 
-        let storage_buffer = Buffer::storage(device.clone(), (size_of::<Matrix4<f32>>() * object_transforms.len()) as u64);
 
         let mut descriptor_pool = DescriptorPool::new(device.clone(), 
             vec![
@@ -243,7 +252,7 @@ impl Renderer {
                     descriptor_count: 1 
                 },
                 vk::DescriptorPoolSize { 
-                    ty: vk::DescriptorType::STORAGE_BUFFER, 
+                    ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 
                     descriptor_count: 1 
                 },
                 vk::DescriptorPoolSize { 
@@ -252,12 +261,18 @@ impl Renderer {
                 }
             ]
         );
-        descriptor_pool.create_sets(set_layout.layout);
+        descriptor_pool.create_sets({
+                &set_layouts.iter().map(|x| -> vk::DescriptorSetLayout {
+                        x.layout
+                    }
+                ).collect()
+            }
+        );
 
         let descriptor_infos = vec![
             DescriptorInfo::buffer(uniform_buffer.buffer),
-            DescriptorInfo::buffer(storage_buffer.buffer),
-            DescriptorInfo::image(texture.sampler, texture.view)
+            DescriptorInfo::image(texture.sampler, texture.view),
+            DescriptorInfo::image(texture2.sampler, texture2.view)
         ];
         let descriptor_writes = vec![
             descriptor_write(
@@ -268,23 +283,23 @@ impl Renderer {
                 1
             ),
             descriptor_write(
-                descriptor_pool.sets[0], 
-                vk::DescriptorType::STORAGE_BUFFER, 
+                descriptor_pool.sets[1], 
+                vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 
                 &descriptor_infos[1], 
-                1, 
+                0, 
                 1
             ),
             descriptor_write(
-                descriptor_pool.sets[0], 
+                descriptor_pool.sets[2], 
                 vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 
                 &descriptor_infos[2], 
-                2, 
+                0, 
                 1
             )
         ];
 
         descriptor_pool.update_sets(descriptor_writes);
-
+            
         let sync_objects = SyncObjects::new(device.clone());
 
         command_pool.allocate_buffers(&swapchain.framebuffers);
@@ -295,7 +310,6 @@ impl Renderer {
             device,
             instance,
 
-            window,
             surface,
 
             debug_objects,
@@ -306,6 +320,8 @@ impl Renderer {
             color_image,
 
             render_pass,
+
+            entities,
 
             pipeline,
 
@@ -318,12 +334,9 @@ impl Renderer {
             projection_view,
             uniform_buffer,
 
-            object_transforms,
-            storage_buffer,
-
             command_pool,
 
-            set_layout,
+            set_layouts,
             descriptor_pool,
 
             sync_objects,
@@ -371,6 +384,101 @@ impl Renderer {
         vk::SampleCountFlags::TYPE_1
     }
 
+    fn create_instance(entry: &ash::Entry) -> ash::Instance {
+        if VALIDATION.is_enable && Self::check_validation_layer_support(entry) == false {
+            panic!("Validation layers requested, but not available!");
+        }
+
+        let info = vk::ApplicationInfo {
+            s_type: vk::StructureType::APPLICATION_INFO,
+            p_application_name: NAME.as_ptr() as *const i8,
+            application_version: vk::make_api_version(1, 0, 0, 0),
+            p_engine_name: "Rail Engine".as_ptr() as *const i8,
+            engine_version: vk::make_api_version(1, 0, 0, 0),
+            api_version: vk::API_VERSION_1_0,
+            ..Default::default()
+        };
+
+        let debug_utils_create_info = populate_debug_messenger_create_info();
+
+        let extension_names = required_extension_names();
+
+        let requred_validation_layer_raw_names: Vec<CString> = VALIDATION
+            .required_validation_layers
+            .iter()
+            .map(|layer_name| CString::new(*layer_name).unwrap())
+            .collect();
+
+        let enable_layer_names: Vec<*const i8> = requred_validation_layer_raw_names
+            .iter()
+            .map(|layer_name| layer_name.as_ptr())
+            .collect();
+
+        let create_info = vk::InstanceCreateInfo {
+            s_type: vk::StructureType::INSTANCE_CREATE_INFO,
+            p_next: if VALIDATION.is_enable {
+                &debug_utils_create_info as *const vk::DebugUtilsMessengerCreateInfoEXT
+                    as *const c_void
+            } else {
+                ptr::null()
+            },
+            flags: vk::InstanceCreateFlags::empty(),
+            p_application_info: &info,
+            pp_enabled_layer_names: if VALIDATION.is_enable {
+                enable_layer_names.as_ptr()
+            } else {
+                ptr::null()
+            },
+            enabled_layer_count: if VALIDATION.is_enable {
+                enable_layer_names.len()
+            } else {
+                0
+            } as u32,
+            pp_enabled_extension_names: extension_names.as_ptr(),
+            enabled_extension_count: extension_names.len() as u32,
+            ..Default::default()
+        };
+
+        unsafe { entry.create_instance(&create_info, None).unwrap() }
+    }
+
+    fn check_validation_layer_support(entry: &ash::Entry) -> bool {
+        // if support validation layer, then return true
+
+        let layer_properties = entry
+            .enumerate_instance_layer_properties()
+            .expect("Failed to enumerate Instance Layers Properties!");
+
+        if layer_properties.len() <= 0 {
+            eprintln!("No available layers.");
+            return false;
+        } else {
+            println!("Instance Available Layers: ");
+            for layer in layer_properties.iter() {
+                let layer_name = vk_to_string(&layer.layer_name);
+                println!("\t{}", layer_name);
+            }
+        }
+
+        for required_layer_name in VALIDATION.required_validation_layers.iter() {
+            let mut is_layer_found = false;
+
+            for layer_property in layer_properties.iter() {
+                let test_layer_name = vk_to_string(&layer_property.layer_name);
+                if (*required_layer_name) == test_layer_name {
+                    is_layer_found = true;
+                    break;
+                }
+            }
+
+            if is_layer_found == false {
+                return false;
+            }
+        }
+
+        true
+    }
+
     pub(crate) fn record(&mut self) {
         for (i, &command_buffer) in self.command_pool.buffers.iter().enumerate() {
             self.command_pool.begin_command_buffer(command_buffer);
@@ -381,21 +489,59 @@ impl Renderer {
                 self.swapchain.framebuffers[i]
             );
 
-            self.descriptor_pool.bind(command_buffer, self.pipeline.layout);
-
             self.pipeline.bind(command_buffer);
 
-            self.mesh.bind(command_buffer);
+            {
+                self.mesh.bind(command_buffer);
 
-            self.mesh.draw(command_buffer, 3);
+                self.descriptor_pool.bind(command_buffer, self.pipeline.layout, 0);
 
+                unsafe { 
+                    let model_bytes = slice::from_raw_parts(
+                        self.entities.get_transforms()[0].as_ptr() as *const u8,
+                        size_of::<Matrix4<f32>>()
+                    );
+                
+                    self.device.logical.cmd_push_constants(
+                        command_buffer, 
+                        self.pipeline.layout, 
+                        vk::ShaderStageFlags::VERTEX, 
+                        0, 
+                        model_bytes
+                    ) 
+                };
+                self.mesh.draw(command_buffer, 1);
+            }
+
+            {
+                self.mesh2.bind(command_buffer);
+
+                self.descriptor_pool.bind(command_buffer, self.pipeline.layout, 1);
+
+                unsafe { 
+                    let model_bytes = slice::from_raw_parts(
+                        self.entities.get_transforms()[1].as_ptr() as *const u8,
+                        size_of::<Matrix4<f32>>()
+                    );
+                
+                    self.device.logical.cmd_push_constants(
+                        command_buffer, 
+                        self.pipeline.layout, 
+                        vk::ShaderStageFlags::VERTEX, 
+                        0, 
+                        model_bytes
+                    ) 
+                };
+                self.mesh2.draw(command_buffer, 1);
+            }
+            
             self.render_pass.end(command_buffer);
 
             self.command_pool.end_command_buffer(command_buffer);
         }
     }
 
-    pub(crate) fn draw(&mut self, camera: &Camera) {
+    pub(crate) fn draw(&mut self, window: &Win32Window, camera: &Camera) {
         let wait_fences = [self.sync_objects.in_flight_fences[self.current_frame]];
 
         unsafe {
@@ -415,7 +561,7 @@ impl Renderer {
                 Ok(image_index) => image_index,
                 Err(vk_result) => match vk_result {
                     vk::Result::ERROR_OUT_OF_DATE_KHR => {
-                        self.recreate_swapchain();
+                        self.recreate_swapchain(window);
                         return;
                     }
                     _ => panic!("Failed to acquire Swap Chain Image!"),
@@ -423,7 +569,6 @@ impl Renderer {
             }
         };
 
-        self.update_storage_buffer();
         self.update_uniform_buffer(camera);
 
         let wait_semaphores = [self.sync_objects.image_available_semaphores[self.current_frame]];
@@ -486,7 +631,7 @@ impl Renderer {
         };
         if is_resized {
             self.is_framebuffer_resized = false;
-            self.recreate_swapchain();
+            self.recreate_swapchain(window);
         }
 
         self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -507,13 +652,16 @@ impl Renderer {
         self.swapchain.destroy();
     }
 
-    fn recreate_swapchain(&mut self) {
+    fn recreate_swapchain(&mut self, window: &Win32Window) {
         self.device.wait_idle();
 
         self.cleanup_swapchain();
 
         self.swapchain = SwapChain::new(
-            &self.instance, self.device.clone(), &self.window, &self.surface,
+            &self.instance, 
+            self.device.clone(), 
+            window.size, 
+            &self.surface
         );
         self.render_pass = RenderPass::new(
             &self.instance,
@@ -525,7 +673,13 @@ impl Renderer {
             self.device.clone(),
             &self.render_pass.pass,
             &self.swapchain,
-            &self.set_layout,
+            {
+                &self.set_layouts.iter().map(|x| -> vk::DescriptorSetLayout {
+                        x.layout
+                    }
+                ).collect()
+            },
+            size_of_array(&self.entities.get_transforms()) as u32,
             self.msaa_samples,
         );
         self.color_image = ColorImage::new(
@@ -552,13 +706,6 @@ impl Renderer {
         self.record();
     }
     
-    fn update_storage_buffer(&mut self) {
-        self.storage_buffer.map(
-            &self.object_transforms, 
-            (size_of::<Matrix4<f32>>() * self.object_transforms.len()) as u64
-        );
-    }
-
     fn update_uniform_buffer(&mut self, camera: &Camera) {
         self.projection_view.view = camera.get_view();
         self.projection_view.proj = camera.get_projection();
@@ -583,7 +730,6 @@ impl Renderer {
         self.descriptor_pool.destroy();
 
         self.uniform_buffer.destroy();
-        self.storage_buffer.destroy();
 
         self.mesh.destroy();
         self.texture.destroy();
@@ -591,11 +737,21 @@ impl Renderer {
         self.mesh2.destroy();
         self.texture2.destroy();
 
-        self.set_layout.destroy();
+        for layout in &self.set_layouts {
+            layout.destroy();
+        };
 
         self.command_pool.destroy();
 
         self.debug_objects.destroy();
+
+        self.device.destroy();
+        
+        self.surface.destroy();
+
+        unsafe { 
+            self.instance.destroy_instance(None) 
+        };
     }
 }
 

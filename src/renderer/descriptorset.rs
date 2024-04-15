@@ -16,7 +16,7 @@ impl DescriptorPool {
         let descriptor_pool = {
             let pool_info = vk::DescriptorPoolCreateInfo {
                 s_type: vk::StructureType::DESCRIPTOR_POOL_CREATE_INFO,
-                max_sets: 1,
+                max_sets: pool_sizes.len() as u32,
                 pool_size_count: pool_sizes.len() as u32,
                 p_pool_sizes: pool_sizes.as_ptr(),
                 ..Default::default()
@@ -35,12 +35,12 @@ impl DescriptorPool {
         }
     }
 
-    pub(crate) fn create_sets(&mut self, set_layout: vk::DescriptorSetLayout) {
+    pub(crate) fn create_sets(&mut self, set_layouts: &Vec<vk::DescriptorSetLayout>) {
         let allocation_info = vk::DescriptorSetAllocateInfo {
             s_type: vk::StructureType::DESCRIPTOR_SET_ALLOCATE_INFO,
             descriptor_pool: self.pool,
-            descriptor_set_count: 1,
-            p_set_layouts: &set_layout,
+            descriptor_set_count: set_layouts.len() as u32,
+            p_set_layouts: set_layouts.as_ptr(),
             ..Default::default()
         };
         
@@ -56,16 +56,14 @@ impl DescriptorPool {
         };
     }
 
-    pub(crate) fn bind(&self, command_buffer: vk::CommandBuffer, layout: vk::PipelineLayout) {
-        let descriptor_sets_to_bind = [self.sets[0]];
-
+    pub(crate) fn bind(&self, command_buffer: vk::CommandBuffer, layout: vk::PipelineLayout, i: usize) {
         unsafe {
             self.device.logical.cmd_bind_descriptor_sets(
                 command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
                 layout,
                 0,
-                &descriptor_sets_to_bind,
+                &[self.sets[0], self.sets[i + 1]],
                 &[],
             );
         }
